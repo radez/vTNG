@@ -1,0 +1,6 @@
+    <interface type='udp'>
+      <source address='127.0.0.1' port='SOURCEPORT'>
+        <local address='127.0.0.1' port='LOCALPORT'/>
+      </source>
+      <model type='e1000'/>
+    </interface>
