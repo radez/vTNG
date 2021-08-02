@@ -1,13 +1,9 @@
-LV_DIR=/var/lib/libvirt/images
-SWITCHES="vqfx vqfx-pfe"
-SPINES="spine0"
-LEAVES="leaf1 leaf2"
-NODES="node0"
-PORTS="0 1 2 3 4 5"
-UPLINK="5"
-SUBNETS=("10.0.0" "192.168.37" "192.168.73")
+source ./vars.sh
 
 set -e
+#set -x
+
+####### Create Virtual Machines ########
 
 # Create Disk images
 for l in $SPINES $LEAVES; do
@@ -33,16 +29,25 @@ for l in $LEAVES; do
     done
 done
 
+####### Setup UDP vNics to interconnect VMs #######
+
+# UDP Ports numbers are 5 digit generated in this construct:
+# Digit 1: 1 for spine switch, 2 for leaf switch
+# Digit 2: 1 and 0 must be opposite on each side of tunnel
+# Digit 3: switch name number ex: spine0 = 0, leaf2 = 2
+# Digits 4&5: 99/98 for vqfx/pfx interconnect, node number for nodes
+
+
 # setup networking
 for l in $SPINES $LEAVES; do
     # Add mgmt and interconnect networks to switches
     for x in $SWITCHES; do
         if [ "$x" = "vqfx" ] ;then
-            src_pre=11
-            local_pre=10
+            src_pre="${UDPPRE[${l:0:-1}]}1"
+            local_pre="${UDPPRE[${l:0:-1}]}0"
         else
-            src_pre=10
-            local_pre=11
+            src_pre="${UDPPRE[${l:0:-1}]}0"
+            local_pre="${UDPPRE[${l:0:-1}]}1"
         fi
         echo "Adding interfaces to $l-$x"
         virsh attach-interface --domain $l-$x --type network --model e1000 --source default --persistent
@@ -60,16 +65,16 @@ for l in $LEAVES; do
 
     # connect leaves to spines
     for s in $SPINES; do
-        src_pre=10
-        local_pre=11
+        src_pre=${UDPPRE[${l:0:-1}]}0
+        local_pre=${UDPPRE[${l:0:-1}]}1
         sed -i '/<serial/e cat udp.xml' /etc/libvirt/qemu/$s-$x.xml
-        sed -i "s/SOURCEPORT/$src_pre${l: -1}0$UPLINK/" /etc/libvirt/qemu/$s-$x.xml
-        sed -i "s/LOCALPORT/$local_pre${l: -1}0$UPLINK/" /etc/libvirt/qemu/$s-$x.xml
+        sed -i "s/SOURCEPORT/$src_pre${l: -1}0${UPLINK[${s: -1}]}/" /etc/libvirt/qemu/$s-$x.xml
+        sed -i "s/LOCALPORT/$local_pre${l: -1}0${UPLINK[${s: -1}]}/" /etc/libvirt/qemu/$s-$x.xml
     done
 
     # Add switch ports to vqfx switches
-    src_pre=11
-    local_pre=10
+    src_pre=${UDPPRE[${l:0:-1}]}1
+    local_pre=${UDPPRE[${l:0:-1}]}0
     for p in $PORTS; do
         sed -i '/<serial/e cat udp.xml' /etc/libvirt/qemu/$l-$x.xml
         sed -i "s/SOURCEPORT/$src_pre${l: -1}0$p/" /etc/libvirt/qemu/$l-$x.xml
@@ -79,8 +84,8 @@ done
 
 # connect server nodes to leaf switches
 for l in $LEAVES; do
-    src_pre=10
-    local_pre=11
+    src_pre=${UDPPRE[${l:0:-1}]}0
+    local_pre=${UDPPRE[${l:0:-1}]}1
     for n in $NODES; do
         sed -i '/<serial/e cat udp.xml' /etc/libvirt/qemu/$l-$n.xml
         sed -i "s/SOURCEPORT/$src_pre${l: -1}0${n: -1}/" /etc/libvirt/qemu/$l-$n.xml
@@ -91,20 +96,25 @@ done
 systemctl reload libvirtd
 sleep 1
 
+
+####### Show me Libvirt Networking Config #######
+# clear the file
+echo "" > libvirt_networking
 # list interfaces
 for l in $SPINES $LEAVES; do
     for x in $SWITCHES; do
-        echo "$l-$x"
-        virsh domiflist $l-$x
+        echo "$l-$x" >> libvirt_networking
+        virsh domiflist $l-$x >> libvirt_networking
     done
 done
 for l in $LEAVES; do
     for x in $NODES; do
-        echo "$l-$x"
-        virsh domiflist $l-$x
+        echo "$l-$x" >> libvirt_networking
+        virsh domiflist $l-$x >> libvirt_networking
     done
 done
 
+####### Start the Virtual Machines #######
 # Start switches
 for l in $SPINES $LEAVES; do
     for x in $SWITCHES; do
@@ -119,6 +129,8 @@ for l in $LEAVES; do
     done
 done
 
+####### Configure the Switches #######
+
 # wait for switch mgmt ip addresses
 for l in $SPINES $LEAVES; do
     echo ""
@@ -127,11 +139,11 @@ for l in $SPINES $LEAVES; do
     while [ -z "$SWIP" ]; do
         SWMAC=$(virsh domiflist $l-vqfx | grep network | awk '{print $5}')
         SWIP=$(virsh net-dhcp-leases default | grep $SWMAC | awk '{print $5}' | cut -d / -f 1)
-        sleep 5
+        if [ -z "$SWIP" ]; then sleep 5; echo -n '.'; fi
     done
 
+    echo ""
     echo "Configuring interconnect IP on vQFX for $l-vqfx"
-    echo "Configuring connection to spine from vQFX $l-vqfx"
 TERM=xterm expect -c "
 set timeout 300
 spawn bash -c \"ssh -o PreferredAuthentications=password -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no root@$SWIP\"
@@ -150,8 +162,6 @@ send \"deactivate system syslog user *\r\"
 expect \"root#\"
 send \"set interfaces em1 unit 0 family inet address 169.254.0.2/24\r\"
 expect \"root#\"
-send \"set interfaces xe-0/0/5 unit 0 family inet address 172.16.${l: -1}.2/24\r\"
-expect \"root#\"
 send \"set system host-name $l\r\"
 expect \"root#\"
 send \"commit\r\"
@@ -167,7 +177,7 @@ send \"exit\r\"
 
 
     if [[ "$l" == *"spine"* ]]; then
-        echo "Configuring connection to leaves on vQFX $l-vqfx"
+        echo "Configuring spine addresses and routes on $l-vqfx"
 
 TERM=xterm expect -c "
 set timeout 300
@@ -183,20 +193,19 @@ send \"cli\r\"
 expect \"root@$l>\"
 send \"config\r\"
 expect \"root@$l#\"
-send \"set interfaces lo0 unit 0 family inet address 10.0.0.1/32\r\"
+send \"set interfaces lo0 unit 0 family inet address 10.0.${l: -1}.1/32\r\"
 expect \"root@$l#\"
-send \"set interfaces lo0 unit 0 family inet address 10.0.0.2/32\r\"
-expect \"root@$l#\"
-send \"set interfaces xe-0/0/0 unit 0 family inet address 172.16.1.1/24\r\"
-expect \"root@$l#\"
-send \"set interfaces xe-0/0/1 unit 0 family inet address 172.16.2.1/24\r\"
+send \"set interfaces lo0 unit 0 family inet address 10.0.${l: -1}.2/32\r\"
 expect \"root@$l#\"
 send \"delete routing-options static\r\"
 expect \"root@$l#\"
-send \"set routing-options static route 192.168.37.0/24 next-hop 172.16.1.2\r\"
-expect \"root@$l#\"
-send \"set routing-options static route 192.168.73.0/24 next-hop 172.16.2.2\r\"
-expect \"root@$l#\"
+foreach h [list $LEAVES] {
+    set index [string range \$h end end]
+    send \"set interfaces xe-0/0/\$index unit 0 family inet address 172.16.${l: -1}.[expr \$index +1]/24\r\"
+    expect \"root@$l#\"
+    send \"set routing-options static route 192.168.\$index.0/24 next-hop 172.16.${l: -1}.1\$index\r\"
+    expect \"root@$l#\"
+}
 send \"commit\r\"
 expect \"root@$l#\"
 send \"exit\r\"
@@ -208,10 +217,11 @@ send \"exit\r\"
     fi
 
     if [[ "$l" == *"leaf"* ]]; then
-        echo "Configuring connection to servers on vQFX $l-vqfx"
+        echo "Configuring leaf addresses and routes on $l-vqfx"
 
 TERM=xterm expect -c "
 set timeout 300
+set uplinks [list $(echo ${UPLINK[@]})]
 spawn bash -c \"ssh -o PreferredAuthentications=password -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no root@$SWIP\"
 expect {
   timeout { exit 1 }
@@ -232,13 +242,18 @@ send \"set interfaces xe-0/0/1 unit 0 family ethernet-switching interface-mode a
 expect \"root@$l#\"
 send \"set interfaces xe-0/0/1 unit 0 family ethernet-switching vlan members default\r\"
 expect \"root@$l#\"
-send \"set interfaces irb unit 1 family inet address ${SUBNETS[${l: -1}]}.1/24\r\"
+foreach h [list $SPINES] {
+    set index [string range \$h end end]
+    send \"set interfaces xe-0/0/[lindex \$uplinks \$index] unit 0 family inet address 172.16.\$index.1${l: -1}/24\r\"
+    expect \"root@$l#\"
+}
+send \"set interfaces irb unit 1 family inet address 192.168.${l: -1}.254/24\r\"
 expect \"root@$l#\"
 send \"set vlans default l3-interface irb.1\r\"
 expect \"root@$l#\"
 send \"delete routing-options static\r\"
 expect \"root@$l#\"
-send \"set routing-options static route 0.0.0.0/0 next-hop 172.16.${l: -1}.1\r\"
+send \"set routing-options static route 0.0.0.0/0 next-hop 172.16.0.$((${l: -1}+1))\r\"
 expect \"root@$l#\"
 send \"commit\r\"
 expect \"root@$l#\"
@@ -249,17 +264,13 @@ expect \"root@$l:RE:0%\"
 send \"exit\r\"
 "
 fi
-
-# On Leaf 1:
-# set routing-options static route 172.16.2.0/24 next-hop 172.16.1.1
-# can ping 172.16.2.1
     unset SWIP
 done
 
 
 
-        SWMAC=$(virsh domiflist $l-vqfx | grep network | awk '{print $5}')
-        SWIP=$(virsh net-dhcp-leases default | grep $SWMAC | awk '{print $5}' | cut -d / -f 1)
+SWMAC=$(virsh domiflist $l-vqfx | grep network | awk '{print $5}')
+SWIP=$(virsh net-dhcp-leases default | grep $SWMAC | awk '{print $5}' | cut -d / -f 1)
 
 echo ""    
 echo ""    
@@ -268,3 +279,7 @@ for l in $SPINES $LEAVES; do
   SWMAC=$(virsh domiflist $l-vqfx | grep network | awk '{print $5}')
   echo "$l-vqfx: $SWMAC :: $(virsh net-dhcp-leases default | grep $SWMAC | awk '{print $5}' | cut -d / -f 1)"
 done
+
+echo ""
+echo ""
+echo "Libvirt Networking is recorded in the file libvirt_networking"

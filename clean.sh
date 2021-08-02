@@ -1,11 +1,7 @@
-LV_DIR=/var/lib/libvirt/images
-SWITCHES="vqfx vqfx-pfe"
-NODES="node0 node1"
-LEAVES="leaf1 leaf2"
-SPINE="spine0"
+source ./vars.sh
 
 # delete Virtual machines
-for l in $LEAVES $SPINE; do
+for l in $SPINES $LEAVES; do
     for x in $SWITCHES; do
         virsh destroy $l-$x
         virsh undefine $l-$x --remove-all-storage
@@ -19,7 +15,7 @@ for l in $LEAVES; do
 done
 
 # ensure deleted Disk images
-for l in $LEAVES $SPINE; do
+for l in $SPINES $LEAVES; do
     for x in $SWITCHES; do
        rm -f $LV_DIR/$l-$x.qcow2
     done
