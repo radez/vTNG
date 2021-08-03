@@ -143,6 +143,23 @@ for l in $SPINES $LEAVES; do
     done
 
     echo ""
+    echo "Installing ssh keys on $l-vqfx"
+TERM=xterm expect -c "
+spawn bash -c \"ssh-copy-id -o PreferredAuthentications=password -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i /home/dradez/.ssh/id_ed25519.pub root@$SWIP\"
+expect {
+  timeout { exit 1 }
+  eof { exit 1 }
+  \"root*password:\"
+}
+send \"Juniper\r\"
+expect {
+  timeout { exit 1 }
+  \"Number of key(s) added: 1\"
+}
+expect \"Number of key(s) added: 1\"
+"
+
+    echo ""
     echo "Configuring interconnect IP on vQFX for $l-vqfx"
 TERM=xterm expect -c "
 set timeout 300
@@ -164,6 +181,26 @@ send \"set interfaces em1 unit 0 family inet address 169.254.0.2/24\r\"
 expect \"root#\"
 send \"set system host-name $l\r\"
 expect \"root#\"
+send \"delete routing-options static\r\"
+expect \"root#\"
+send \"set protocols bgp group vTNG type external\r\"
+expect \"root#\"
+send \"set protocols bgp group vTNG export send-direct\r\"
+expect \"root#\"
+send \"set protocols bgp group vTNG hold-time 10\r\"
+expect \"root#\"
+send \"set protocols bgp group vTNG family inet unicast\r\"
+expect \"root#\"
+send \"set protocols bgp group vTNG multipath multiple-as\r\"
+expect \"root#\"
+send \"set policy-options policy-statement send-direct term 1 from protocol direct\r\"
+expect \"root#\"
+send \"set policy-options policy-statement send-direct term 1 then accept\r\"
+expect \"root#\"
+send \"set policy-options policy-statement PFE-ECMP then load-balance per-packet\r\"
+expect \"root#\"
+send \"set routing-options forwarding-table export PFE-ECMP\r\"
+expect \"root#\"
 send \"commit\r\"
 expect \"root@$l#\"
 send \"exit\r\"
@@ -174,7 +211,6 @@ send \"exit\r\"
 expect \"root@:RE:0%\"
 send \"exit\r\"
 "
-
 
     if [[ "$l" == *"spine"* ]]; then
         echo "Configuring spine addresses and routes on $l-vqfx"
@@ -195,15 +231,13 @@ send \"config\r\"
 expect \"root@$l#\"
 send \"set interfaces lo0 unit 0 family inet address 10.0.${l: -1}.1/32\r\"
 expect \"root@$l#\"
-send \"set interfaces lo0 unit 0 family inet address 10.0.${l: -1}.2/32\r\"
-expect \"root@$l#\"
-send \"delete routing-options static\r\"
+send \"set routing-options autonomous-system 420000000${l: -1}\r\"
 expect \"root@$l#\"
 foreach h [list $LEAVES] {
     set index [string range \$h end end]
-    send \"set interfaces xe-0/0/\$index unit 0 family inet address 172.16.${l: -1}.[expr \$index +1]/24\r\"
+    send \"set interfaces xe-0/0/\$index unit 0 family inet address 172.16.${l: -1}.[expr \$index *2]/31\r\"
     expect \"root@$l#\"
-    send \"set routing-options static route 192.168.\$index.0/24 next-hop 172.16.${l: -1}.1\$index\r\"
+    send \"set protocols bgp group vTNG neighbor 172.16.${l: -1}.[expr [expr \$index *2] +1] peer-as 420000001\$index\r\"
     expect \"root@$l#\"
 }
 send \"commit\r\"
@@ -234,6 +268,8 @@ send \"cli\r\"
 expect \"root@$l>\"
 send \"config\r\"
 expect \"root@$l#\"
+send \"set interfaces lo0 unit 0 family inet address 10.0.${l: -1}.2/32\r\"
+expect \"root@$l#\"
 send \"set interfaces xe-0/0/0 unit 0 family ethernet-switching interface-mode access\r\"
 expect \"root@$l#\"
 send \"set interfaces xe-0/0/0 unit 0 family ethernet-switching vlan members default\r\"
@@ -242,18 +278,18 @@ send \"set interfaces xe-0/0/1 unit 0 family ethernet-switching interface-mode a
 expect \"root@$l#\"
 send \"set interfaces xe-0/0/1 unit 0 family ethernet-switching vlan members default\r\"
 expect \"root@$l#\"
+send \"set routing-options autonomous-system 420000001${l: -1}\r\"
+expect \"root@$l#\"
 foreach h [list $SPINES] {
     set index [string range \$h end end]
-    send \"set interfaces xe-0/0/[lindex \$uplinks \$index] unit 0 family inet address 172.16.\$index.1${l: -1}/24\r\"
+    send \"set interfaces xe-0/0/[lindex \$uplinks \$index] unit 0 family inet address 172.16.\$index.$((${l: -1}*2+1))/31\r\"
+    expect \"root@$l#\"
+    send \"set protocols bgp group vTNG neighbor 172.16.\$index.$((${l: -1}*2)) peer-as 420000000\$index\r\"
     expect \"root@$l#\"
 }
 send \"set interfaces irb unit 1 family inet address 192.168.${l: -1}.254/24\r\"
 expect \"root@$l#\"
 send \"set vlans default l3-interface irb.1\r\"
-expect \"root@$l#\"
-send \"delete routing-options static\r\"
-expect \"root@$l#\"
-send \"set routing-options static route 0.0.0.0/0 next-hop 172.16.0.$((${l: -1}+1))\r\"
 expect \"root@$l#\"
 send \"commit\r\"
 expect \"root@$l#\"
