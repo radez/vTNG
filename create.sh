@@ -8,24 +8,24 @@ set -e
 # Create Disk images
 for l in $SPINES $LEAVES; do
     for x in $SWITCHES; do
-       qemu-img create -b $LV_DIR/$x.img -f qcow2 $LV_DIR/$l-$x.qcow2 30G
+       qemu-img create -b $LV_DIR/${SWIMAGES[$x]} -f qcow2 $LV_DIR/$l-$x.qcow2 30G
     done
 done
 for l in $LEAVES; do
     for n in $NODES; do
-        qemu-img create -b $LV_DIR/cirros-0.5.2-x86_64-disk.img -f qcow2 $LV_DIR/$l-$n.qcow2 30G
+        qemu-img create -b $LV_DIR/$NODE -f qcow2 $LV_DIR/$l-$n.qcow2 30G
     done
 done
 
 # Create Virtual machines
 for l in $SPINES $LEAVES; do
     for x in $SWITCHES; do
-        virt-install --name $l-$x --memory 1024 --vcpus 1 --disk $LV_DIR/$l-$x.qcow2 --import --noautoconsole --noreboot --network none --os-variant unknown
+        virt-install --name $l-$x --memory $SWMEM --vcpus $SWCPU --disk $LV_DIR/$l-$x.qcow2 --import --noautoconsole --noreboot --network none --os-variant generic
     done
 done
 for l in $LEAVES; do
     for x in $NODES; do
-        virt-install --name $l-$x --memory 512 --vcpus 1 --disk $LV_DIR/$l-$x.qcow2 --import --noautoconsole --noreboot --network none --os-variant unknown
+        virt-install --name $l-$x --memory $NODEMEM --vcpus $NODECPU --disk $LV_DIR/$l-$x.qcow2 --import --noautoconsole --noreboot --network none --os-variant generic
     done
 done
 
@@ -114,18 +114,23 @@ for l in $LEAVES; do
     done
 done
 
+ct=0
 ####### Start the Virtual Machines #######
 # Start switches
 for l in $SPINES $LEAVES; do
     for x in $SWITCHES; do
-        virsh start $l-$x
+        sleep $((ct*30)) && virsh start $l-$x &
+        echo "Scheduled $l-$x for start in $((ct*30)) seconds"
+        ct=$((ct+1))
     done
 done
 
 # Start  nodes
 for l in $LEAVES; do
     for n in $NODES; do
-        virsh start $l-$n
+        sleep $((ct*30)) && virsh start $l-$n &
+        echo "Scheduled $l-$n for start in $((ct*30)) seconds"
+        ct=$((ct+1))
     done
 done
 
@@ -142,10 +147,15 @@ for l in $SPINES $LEAVES; do
         if [ -z "$SWIP" ]; then sleep 5; echo -n '.'; fi
     done
 
+    sleep 1
+
     echo ""
-    echo "Installing ssh keys on $l-vqfx"
+    if [ -z "$PUBKEY" ]; then
+        echo "Skipping pubkey install"
+    elif [ -f "$PUBKEY" ]; then
+        echo "Installing ssh keys on $l-vqfx"
 TERM=xterm expect -c "
-spawn bash -c \"ssh-copy-id -o PreferredAuthentications=password -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i /home/dradez/.ssh/id_ed25519.pub root@$SWIP\"
+spawn bash -c \"ssh-copy-id -o PreferredAuthentications=password -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i $PUBKEY root@$SWIP\"
 expect {
   timeout { exit 1 }
   eof { exit 1 }
@@ -158,6 +168,7 @@ expect {
 }
 expect \"Number of key(s) added: 1\"
 "
+    fi
 
     echo ""
     echo "Configuring interconnect IP on vQFX for $l-vqfx"
@@ -170,37 +181,41 @@ expect {
   \"root*password:\"
 }
 send \"Juniper\r\"
-expect \"root@:RE:0%\"
+expect \"root@*:RE:0%\"
 send \"cli\r\"
-expect \"root>\"
+expect \"root*>\"
 send \"config\r\"
-expect \"root#\"
+expect \"root*#\"
 send \"deactivate system syslog user *\r\"
-expect \"root#\"
+expect \"root*#\"
 send \"set interfaces em1 unit 0 family inet address 169.254.0.2/24\r\"
-expect \"root#\"
+expect \"root*#\"
 send \"set system host-name $l\r\"
-expect \"root#\"
-send \"delete routing-options static\r\"
-expect \"root#\"
+expect \"root*#\"
+send \"delete routing-options\r\"
+expect \"root*#\"
+send \"wildcard delete interfaces xe*\r\"
+expect \"Delete * objects? *\"
+send \"yes\r\"
+expect \"root*#\"
 send \"set protocols bgp group vTNG type external\r\"
-expect \"root#\"
+expect \"root*#\"
 send \"set protocols bgp group vTNG export send-direct\r\"
-expect \"root#\"
+expect \"root*#\"
 send \"set protocols bgp group vTNG hold-time 10\r\"
-expect \"root#\"
+expect \"root*#\"
 send \"set protocols bgp group vTNG family inet unicast\r\"
-expect \"root#\"
+expect \"root*#\"
 send \"set protocols bgp group vTNG multipath multiple-as\r\"
-expect \"root#\"
+expect \"root*#\"
 send \"set policy-options policy-statement send-direct term 1 from protocol direct\r\"
-expect \"root#\"
+expect \"root*#\"
 send \"set policy-options policy-statement send-direct term 1 then accept\r\"
-expect \"root#\"
+expect \"root*#\"
 send \"set policy-options policy-statement PFE-ECMP then load-balance per-packet\r\"
-expect \"root#\"
+expect \"root*#\"
 send \"set routing-options forwarding-table export PFE-ECMP\r\"
-expect \"root#\"
+expect \"root*#\"
 send \"commit\r\"
 expect \"root@$l#\"
 send \"exit\r\"
@@ -208,7 +223,7 @@ expect \"root@$l>\"
 send \"restart chassis-control\r\"
 expect \"root@$l>\"
 send \"exit\r\"
-expect \"root@:RE:0%\"
+expect \"root@*:RE:0%\"
 send \"exit\r\"
 "
 
@@ -224,7 +239,7 @@ expect {
   \"root*password:\"
 }
 send \"Juniper\r\"
-expect \"root@$l:RE:0%\"
+expect \"root@*:RE:0%\"
 send \"cli\r\"
 expect \"root@$l>\"
 send \"config\r\"
