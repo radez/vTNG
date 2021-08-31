@@ -9,6 +9,7 @@ LV_DIR=/var/lib/libvirt/images
 VQFXRE=vqfx-20.2R1.10-re-qemu.qcow2
 VQFXPFE=vqfx-20.2R1-2019010209-pfe-qemu.qcow2
 NODE=cirros-0.5.2-x86_64-disk.img
+#NODE=Fedora-Cloud-Base-34-1.2.x86_64.qcow2
 
 
 # Deployment Variables
@@ -20,7 +21,7 @@ NODE=cirros-0.5.2-x86_64-disk.img
 
 SPINES="spine0 spine1"
 LEAVES="leaf0 leaf1"
-NODES="node0"
+NODES="node0 node1"
 
 
 SWMEM=1024
