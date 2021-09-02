@@ -52,6 +52,8 @@ if {\"node2\" == \"$n\"} {
 
 }
 "
+echo ""
+echo ""
 
     done
 done

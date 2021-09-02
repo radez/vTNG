@@ -26,6 +26,14 @@ done
 for l in $LEAVES; do
     for x in $NODES; do
         virt-install --name $l-$x --memory $NODEMEM --vcpus $NODECPU --disk $LV_DIR/$l-$x.qcow2 --import --noautoconsole --noreboot --network none --os-variant generic
+        if [ -n "$NODECDROM" ]; then
+            if [ ! -f /path/to/file ]; then
+                pushd fedora-cloud-init
+                genisoimage -output $LV_DIR/$NODECDROM -volid cidata -joliet -rock user-data meta-data
+                popd
+            fi
+            virsh attach-disk $l-$x --config $LV_DIR/$NODECDROM hdb --type cdrom
+        fi
     done
 done
 
@@ -203,6 +211,8 @@ send \"wildcard delete interfaces et-*\r\"
 expect \"Delete * objects? *\"
 send \"yes\r\"
 expect \"root*#\"
+
+### All Switches Common Underlay Configs ###
 send \"set protocols bgp group underlay type external\r\"
 expect \"root*#\"
 send \"set protocols bgp group underlay export send-direct\r\"
@@ -223,6 +233,8 @@ send \"set policy-options policy-statement LB-policy then load-balance per-packe
 expect \"root*#\"
 send \"set routing-options forwarding-table export LB-policy\r\"
 expect \"root*#\"
+
+
 send \"commit\r\"
 expect \"root@$l#\"
 send \"exit\r\"
@@ -253,12 +265,16 @@ send \"config\r\"
 expect \"root@$l#\"
 send \"set interfaces lo0 unit 0 family inet address 10.0.0.1${l: -1}/32 primary\r\"
 expect \"root@$l#\"
+
+
+### Spine Switches Underlay Configs ###
 send \"set routing-options router-id 10.0.0.1${l: -1}\r\"
 expect \"root@$l#\"
 send \"set routing-options autonomous-system 65001\r\"
 expect \"root@$l#\"
 send \"set protocols bgp group underlay peer-as 65000\r\"
-expect \"root*#\"
+expect \"root@$l#\"
+
 foreach h [list $LEAVES] {
     set index [string range \$h end end]
     send \"set interfaces xe-0/0/\$index unit 0 family inet address 172.16.${l: -1}.[expr \$index *2]/31\r\"
@@ -268,7 +284,7 @@ foreach h [list $LEAVES] {
 }
 
 
-
+### Spine Switches Overlay Configs ###
 send \"set protocols bgp group evpn type internal\r\"
 expect \"root@$l#\"
 send \"set protocols bgp group evpn local-address 10.0.0.1${l: -1}\r\"
@@ -315,15 +331,17 @@ send \"set switch-options vrf-target auto\r\"
 expect \"root@$l#\"
 
 
-
-send \"set interfaces lo0 unit 1 family inet address 10.1${l: -1}.0.3/32 \r\"
+send \"set interfaces lo0 unit 3 family inet address 10.1${l: -1}.0.3/32 \r\"
+expect \"root@$l#\"
+send \"set interfaces lo0 unit 7 family inet address 10.1${l: -1}.0.7/32 \r\"
 expect \"root@$l#\"
 send \"set interfaces irb unit 3 family inet address 192.168.3.1${l: -1}/24 virtual-gateway-address 192.168.3.254\r\"
 expect \"root@$l#\"
-send \"set protocols evpn extended-vni-list \[ 3 \]\r\"
+send \"set interfaces irb unit 7 family inet address 192.168.7.1${l: -1}/24 virtual-gateway-address 192.168.7.254\r\"
 expect \"root@$l#\"
-#send \"set protocols evpn vni-options vni 3 vrf-target export target:10003:3\r\"
-#expect \"root@$l#\"
+send \"set protocols evpn extended-vni-list \[ 3 7 \]\r\"
+expect \"root@$l#\"
+
 send \"set policy-options policy-statement EVPN_VRF_IMPORT term vrf0001 from community vrf0001\r\"
 expect \"root@$l#\"
 send \"set policy-options policy-statement EVPN_VRF_IMPORT term vrf0001 then accept\r\"
@@ -338,7 +356,7 @@ send \"set routing-instances vrf0001 instance-type vrf\r\"
 expect \"root@$l#\"
 send \"set routing-instances vrf0001 interface irb.3\r\"
 expect \"root@$l#\"
-send \"set routing-instances vrf0001 interface lo0.1\r\"
+send \"set routing-instances vrf0001 interface lo0.3\r\"
 expect \"root@$l#\"
 send \"set routing-instances vrf0001 route-distinguisher 10.0.0.1${l: -1}:2001\r\"
 expect \"root@$l#\"
@@ -364,6 +382,44 @@ send \"set routing-instances vrf0001 vrf-import vrf0001_vrf_imp\r\"
 expect \"root@$l#\"
 
 
+send \"set policy-options policy-statement EVPN_VRF_IMPORT term vrf0002 from community vrf0002\r\"
+expect \"root@$l#\"
+send \"set policy-options policy-statement EVPN_VRF_IMPORT term vrf0002 then accept\r\"
+expect \"root@$l#\"
+send \"set policy-options policy-statement EVPN_VRF_IMPORT term vni0007 from community vni0007\r\"
+expect \"root@$l#\"
+send \"set policy-options policy-statement EVPN_VRF_IMPORT term vni0007 then accept\r\"
+expect \"root@$l#\"
+send \"set policy-options community vni0007 members target:10003:7\r\"
+expect \"root@$l#\"
+send \"set routing-instances vrf0002 instance-type vrf\r\"
+expect \"root@$l#\"
+send \"set routing-instances vrf0002 interface irb.7\r\"
+expect \"root@$l#\"
+send \"set routing-instances vrf0002 interface lo0.7\r\"
+expect \"root@$l#\"
+send \"set routing-instances vrf0002 route-distinguisher 10.0.0.1${l: -1}:2002\r\"
+expect \"root@$l#\"
+send \"set routing-instances vrf0002 vrf-target target:10001:2\r\"
+expect \"root@$l#\"
+send \"set routing-instances vrf0002 routing-options auto-export\r\"
+expect \"root@$l#\"
+send \"set vlans vlan0007 vlan-id 7\r\"
+expect \"root@$l#\"
+send \"set vlans vlan0007 l3-interface irb.7\r\"
+expect \"root@$l#\"
+send \"set vlans vlan0007 vxlan vni 7\r\"
+expect \"root@$l#\"
+send \"set vlans vlan0007 vxlan ingress-node-replication\r\"
+expect \"root@$l#\"
+send \"set policy-options policy-statement vrf0002_vrf_imp term 1 from community vrf0002\r\"
+expect \"root@$l#\"
+send \"set policy-options policy-statement vrf0002_vrf_imp term 1 then accept\r\"
+expect \"root@$l#\"
+send \"set policy-options community vrf0002 members target:10001:2\r\"
+expect \"root@$l#\"
+send \"set routing-instances vrf0002 vrf-import vrf0002_vrf_imp\r\"
+expect \"root@$l#\"
 
 send \"commit\r\"
 expect \"root@$l#\"
@@ -407,6 +463,12 @@ send \"set interfaces xe-0/0/1 unit 0 family ethernet-switching interface-mode a
 expect \"root@$l#\"
 send \"set interfaces xe-0/0/1 unit 0 family ethernet-switching vlan members 3\r\"
 expect \"root@$l#\"
+send \"set interfaces xe-0/0/2 unit 0 family ethernet-switching interface-mode trunk\r\"
+expect \"root@$l#\"
+send \"set interfaces xe-0/0/2 unit 0 family ethernet-switching vlan members 7\r\"
+expect \"root@$l#\"
+
+### Leaf Switches Underlay Configs ###
 send \"set protocols bgp group underlay peer-as 65001\r\"
 expect \"root*#\"
 send \"set protocols bgp group underlay local-as 65000 loops 1\r\"
@@ -424,6 +486,7 @@ send \"set vlans default l3-interface irb.0\r\"
 expect \"root*#\"
 
 
+### Leaf Switches Overlay Configs ###
 send \"set protocols bgp group evpn type internal\r\"
 expect \"root@$l#\"
 send \"set protocols bgp group evpn local-address 10.0.0.2${l: -1}\r\"
@@ -434,6 +497,7 @@ send \"set protocols bgp group evpn local-as 65010\r\"
 expect \"root@$l#\"
 send \"set protocols bgp group evpn multipath\r\"
 expect \"root@$l#\"
+
 foreach h [list $SPINES] {
     set index [string range \$h end end]
     send \"set protocols bgp group evpn neighbor 10.0.0.1\$index\r\"
@@ -446,6 +510,8 @@ foreach h [list $LEAVES] {
         expect \"root@$l#\"
     }
 }
+
+### Leaf Switches VXLAN Configs ###
 send \"set protocols evpn encapsulation vxlan\r\"
 expect \"root@$l#\"
 send \"set protocols evpn multicast-mode ingress-replication\r\"
@@ -468,9 +534,7 @@ send \"set switch-options vrf-target auto\r\"
 expect \"root@$l#\"
 
 
-#send \"set protocols evpn vni-options vni 3 vrf-target export target:10003:3\r\"
-#expect \"root@$l#\"
-send \"set protocols evpn extended-vni-list \[ 3 \]\r\"
+send \"set protocols evpn extended-vni-list \[ 3 7 \]\r\"
 expect \"root@$l#\"
 send \"set policy-options policy-statement EVPN_VRF_IMPORT term vrf0001 from community vrf0001\r\"
 expect \"root@$l#\"
@@ -490,6 +554,27 @@ send \"set vlans vlan0003 vxlan vni 3\r\"
 expect \"root@$l#\"
 send \"set vlans vlan0003 vxlan ingress-node-replication\r\"
 expect \"root@$l#\"
+
+
+send \"set policy-options policy-statement EVPN_VRF_IMPORT term vrf0002 from community vrf0002\r\"
+expect \"root@$l#\"
+send \"set policy-options policy-statement EVPN_VRF_IMPORT term vrf0002 then accept\r\"
+expect \"root@$l#\"
+send \"set policy-options policy-statement EVPN_VRF_IMPORT term vni0007 from community vni0007\r\"
+expect \"root@$l#\"
+send \"set policy-options policy-statement EVPN_VRF_IMPORT term vni0007 then accept\r\"
+expect \"root@$l#\"
+send \"set policy-options community vrf0002 members target:10001:2\r\"
+expect \"root@$l#\"
+send \"set policy-options community vni0007 members target:10003:7\r\"
+expect \"root@$l#\"
+send \"set vlans vlan0007 vlan-id 7\r\"
+expect \"root@$l#\"
+send \"set vlans vlan0007 vxlan vni 7\r\"
+expect \"root@$l#\"
+send \"set vlans vlan0007 vxlan ingress-node-replication\r\"
+expect \"root@$l#\"
+
 
 send \"commit\r\"
 expect \"root@$l#\"

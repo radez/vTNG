@@ -1,0 +1,11 @@
+#cloud-config
+system_info:
+   default_user:
+     name: fedora
+
+chpasswd:
+  list: |
+    fedora:fedora
+  expire: False
+
+resize_rootfs: True

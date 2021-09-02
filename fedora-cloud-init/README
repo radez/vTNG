@@ -1,0 +1,11 @@
+# Fedora cloud image doesn't have a user with a password on it.
+# It expects cloud-init to place creds or pubkey on the node.
+# Use the files in this directory to generate an iso and add the iso
+# to fedora using --cdrom and virt-install or virsh attach-disk
+
+# https://codeofconnor.com/booting-cloud-images-with-qemu/ 
+
+
+genisoimage -output /var/lib/libvirt/images/fedora-cloud-init.iso -volid cidata -joliet -rock user-data meta-data
+virt-install ... --cdrom /var/lib/libvirt/images/fedora-cloud-init.iso
+virsh attach-disk $l-$x --config /var/lib/libvirt/images/fedora-cloud-init.iso hdb --type cdrom
