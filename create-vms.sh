@@ -3,6 +3,8 @@ source ./vars.sh
 set -e
 #set -x
 
+DELAY=5
+
 ####### Create Virtual Machines ########
 
 # Create Disk images
@@ -127,8 +129,8 @@ ct=0
 # Start switches
 for l in $SPINES $LEAVES; do
     for x in $SWITCHES; do
-        sleep $((ct*30)) && virsh start $l-$x &
-        echo "Scheduled $l-$x for start in $((ct*30)) seconds"
+        sleep $((ct*$DELAY)) && virsh start $l-$x &
+        echo "Scheduled $l-$x for start in $((ct*$DELAY)) seconds"
         ct=$((ct+1))
     done
 done
@@ -136,8 +138,8 @@ done
 # Start  nodes
 for l in $LEAVES; do
     for n in $NODES; do
-        sleep $((ct*30)) && virsh start $l-$n &
-        echo "Scheduled $l-$n for start in $((ct*30)) seconds"
+        sleep $((ct*$DELAY)) && virsh start $l-$n &
+        echo "Scheduled $l-$n for start in $((ct*$DELAY)) seconds"
         # don't increase start delay. starte all the nodes at once
         #ct=$((ct+1))
     done
